@@ -1,0 +1,61 @@
+diff --git a/node_modules/@medusajs/event-bus-redis/dist/loaders/index.js b/node_modules/@medusajs/event-bus-redis/dist/loaders/index.js
+index 0fbc941..fea23b3 100644
+--- a/node_modules/@medusajs/event-bus-redis/dist/loaders/index.js
++++ b/node_modules/@medusajs/event-bus-redis/dist/loaders/index.js
+@@ -6,6 +6,38 @@ Object.defineProperty(exports, "__esModule", { value: true });
+ const awilix_1 = require("@medusajs/framework/awilix");
+ const ioredis_1 = __importDefault(require("ioredis"));
+ const os_1 = require("os");
++function attachConnectionResilience(connection, logger, label) {
++    let unavailable = false;
++    let reconnectTimer;
++    const reportUnavailable = (error) => {
++        if (unavailable)
++            return;
++        unavailable = true;
++        logger?.error(`[Redis] ${label} connection unavailable: ${error}`);
++    };
++    connection.on("error", reportUnavailable);
++    connection.on("ready", () => {
++        if (unavailable) {
++            logger?.info(`[Redis] ${label} connection restored`);
++            unavailable = false;
++        }
++        if (reconnectTimer) {
++            clearTimeout(reconnectTimer);
++            reconnectTimer = undefined;
++        }
++    });
++    connection.on("end", () => {
++        if (connection.manuallyClosing)
++            return;
++        reportUnavailable(new Error("reconnect attempts exhausted"));
++        const cooldown = Number.parseInt(process.env.REDIS_RECONNECT_COOLDOWN_MS ?? "30000", 10);
++        if (reconnectTimer)
++            clearTimeout(reconnectTimer);
++        reconnectTimer = setTimeout(() => connection.connect().catch(reportUnavailable), cooldown);
++        reconnectTimer.unref?.();
++    });
++    return reportUnavailable;
++}
+ exports.default = async ({ container, logger, options, }) => {
+     const { redisUrl, redisOptions, queueName, queueOptions, workerOptions, jobOptions, } = options;
+     if (!redisUrl) {
+@@ -19,14 +51,13 @@ exports.default = async ({ container, logger, options, }) => {
+         lazyConnect: true,
+         ...(redisOptions ?? {}),
+     });
++    const reportUnavailable = attachConnectionResilience(connection, logger, "event bus");
+     try {
+-        await new Promise(async (resolve) => {
+-            await connection.connect(resolve);
+-        });
++        await connection.connect();
+         logger?.info(`Connection to Redis in module 'event-bus-redis' established`);
+     }
+     catch (err) {
+-        logger?.error(`An error occurred while connecting to Redis in module 'event-bus-redis':${os_1.EOL} ${err}`);
++        reportUnavailable(err);
+     }
+     container.register({
+         eventBusRedisConnection: (0, awilix_1.asValue)(connection),

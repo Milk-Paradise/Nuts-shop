@@ -1,0 +1,188 @@
+# Backend is a separate repository, so every branch push concerns this
+# application only.  Do not add monorepo path filters here.
+include: 
+  - component: $CI_SERVER_FQDN/termits/catalog-infra/deploy@9d43554fa92b7f4525aa91a29e66281cbd87eaa1
+    inputs:
+      application: backend
+      digest: "$CI_REGISTRY_IMAGE@$BACKEND_IMAGE_DIGEST"
+      release-id: "$CI_COMMIT_SHA"
+      environment: prod
+      health-endpoint: "$HEALTH_BACKEND_URL"
+  - component: $CI_SERVER_FQDN/termits/catalog-infra/deploy@9d43554fa92b7f4525aa91a29e66281cbd87eaa1
+    inputs:
+      application: backend
+      digest: "$CI_REGISTRY_IMAGE@$BACKEND_IMAGE_DIGEST"
+      release-id: "$CI_COMMIT_SHA"
+      environment: qa-a
+      health-endpoint: "$HEALTH_BACKEND_URL"
+  - component: $CI_SERVER_FQDN/termits/catalog-infra/deploy@9d43554fa92b7f4525aa91a29e66281cbd87eaa1
+    inputs:
+      application: backend
+      digest: "$CI_REGISTRY_IMAGE@$BACKEND_IMAGE_DIGEST"
+      release-id: "$CI_COMMIT_SHA"
+      environment: qa-b
+      health-endpoint: "$HEALTH_BACKEND_URL"
+
+stages:
+  - lint
+  - typecheck
+  - unit
+  - build
+  - integration
+  - deploy
+
+default:
+  interruptible: false
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+.node-check:
+  image: node:22-bookworm
+  before_script:
+    - |
+      set -euo pipefail
+      node_major="$(node -p 'process.versions.node.split(".")[0]')"
+      cache_key="node${node_major}-$(uname -m)-$(sha256sum package-lock.json | awk '{print $1}')"
+      export npm_config_cache="/ci-cache/npm/${cache_key}"
+      mkdir -p "$npm_config_cache"
+      npm ci --prefer-offline --no-audit --no-fund
+
+lint:
+  extends: .node-check
+  stage: lint
+  script:
+    - npm run architecture:check
+    - npm run lint
+
+typecheck:
+  extends: .node-check
+  stage: typecheck
+  script:
+    - npm run typecheck:admin
+
+unit:
+  extends: .node-check
+  stage: unit
+  script:
+    - npm run test:unit
+
+# Точка входа применяет миграции и создаёт администратора при каждом старте
+# контейнера, то есть это код выкатки. Без своего job'а он в конвейере не
+# проверялся бы вовсе: `test:scripts` не входит ни в `test`, ни в `test:unit`.
+unit:scripts:
+  extends: .node-check
+  stage: unit
+  script:
+    - npm run test:scripts
+
+integration:http:
+  extends: .node-check
+  stage: integration
+  # Интеграционные тесты доступны после сборки, до ручных выкладок. Job
+  # остаётся ручным и allow_failure: пока набор не починен целиком (AIL-63),
+  # он не должен ни блокировать, ни молчаливо гейтить выкладку.
+  when: manual
+  allow_failure: true
+  variables:
+    NODE_ENV: test
+    POSTGRES_DB: medusa_backend_v2
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    DB_HOST: postgres
+    DB_PORT: "5432"
+    DB_USERNAME: postgres
+    DB_PASSWORD: postgres
+  services:
+    # Отдельные Medusa-инстансы тестовых сьютов используют независимые пулы.
+    # Запас соединений покрывает миграции двух параллельных Jest-воркеров.
+    - name: postgres:16-bookworm
+      alias: postgres
+      command: ["postgres", "-c", "max_connections=300"]
+    - name: redis:7-bookworm
+      alias: redis
+  before_script:
+    - !reference [.node-check, before_script]
+    - |
+      set -euo pipefail
+      apt-get update
+      apt-get install --yes --no-install-recommends postgresql-client redis-tools
+      for attempt in $(seq 1 60); do
+        if PGPASSWORD="$DB_PASSWORD" pg_isready --quiet --host="$DB_HOST" --port="$DB_PORT" --username="$DB_USERNAME" --dbname="$POSTGRES_DB" \
+          && PGPASSWORD="$DB_PASSWORD" psql --no-psqlrc --tuples-only --no-align --host="$DB_HOST" --port="$DB_PORT" --username="$DB_USERNAME" --dbname="$POSTGRES_DB" --command='SELECT 1' | grep -qx '1'; then
+          break
+        fi
+        if [ "$attempt" -eq 60 ]; then
+          echo "PostgreSQL did not become ready" >&2
+          exit 1
+        fi
+        sleep 1
+      done
+      for attempt in $(seq 1 60); do
+        if redis-cli --raw -h redis -p 6379 ping | grep -qx 'PONG'; then
+          break
+        fi
+        if [ "$attempt" -eq 60 ]; then
+          echo "Redis did not become ready" >&2
+          exit 1
+        fi
+        sleep 1
+      done
+    - set -a; . ./.env.test; set +a
+    - export DB_HOST=postgres DB_PORT=5432 DB_USERNAME=postgres DB_PASSWORD=postgres
+    - export DATABASE_URL="postgres://postgres:postgres@postgres:5432/medusa_backend_v2"
+    - export REDIS_URL="redis://redis:6379"
+  script:
+    # Каждый сьют поднимает отдельный Medusa-инстанс; параллелизм ограничен
+    # двумя Jest-воркерами, чтобы изолировать состояние между файлами.
+    - npm run test:integration:http -- --maxWorkers=2
+
+build:backend:
+  stage: build
+  # Образ не зависит от интеграционных тестов: они идут двадцать минут, а
+  # выкатка всё равно ручная и запускается человеком, который видит статус
+  # прогона целиком.
+  needs:
+    - lint
+    - typecheck
+    - unit
+  timeout: 15m
+  image:
+    name: moby/buildkit:v0.18.2
+    entrypoint: [""]
+  variables:
+    BUILDKIT_HOST: unix:///run/buildkit/buildkitd.sock
+  artifacts:
+    reports:
+      dotenv: backend-image.env
+    paths:
+      - backend-image.env
+  script:
+    - |
+      set -euo pipefail
+      mkdir -p /root/.docker
+      registry_auth="$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')"
+      printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$CI_REGISTRY" "$registry_auth" > /root/.docker/config.json
+      unset registry_auth
+
+      apk add --no-cache jq
+      lock_hash="$(sha256sum package-lock.json | awk '{print $1}')"
+      image="$CI_REGISTRY_IMAGE:sha-$CI_COMMIT_SHA"
+      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        image="$image,$CI_REGISTRY_IMAGE:latest"
+      fi
+      buildctl --addr "$BUILDKIT_HOST" build \
+        --progress plain \
+        --frontend dockerfile.v0 \
+        --local context=. \
+        --local dockerfile=. \
+        --opt filename=Dockerfile \
+        --opt platform=linux/amd64 \
+        --opt build-arg:TARGETARCH=amd64 \
+        --opt build-arg:NPM_CACHE_LOCK_HASH="$lock_hash" \
+        --output "type=image,\"name=$image\",push=true" \
+        --metadata-file build-metadata.json
+      digest="$(jq --exit-status --raw-output '."containerimage.digest"' build-metadata.json)"
+      case "$digest" in sha256:[0-9a-fA-F][0-9a-fA-F]*) ;; *) echo "BuildKit did not return an image digest" >&2; exit 1 ;; esac
+      printf 'BACKEND_IMAGE_DIGEST=%s\n' "$digest" > backend-image.env

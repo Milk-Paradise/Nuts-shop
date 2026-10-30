@@ -1,0 +1,106 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nuts_shop
+      POSTGRES_USER: nuts
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U nuts -d nuts_shop"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: [redis-server, --appendonly, "yes"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  meilisearch:
+    image: getmeili/meilisearch:v1.16.0
+    restart: unless-stopped
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:?Set MEILI_MASTER_KEY}
+      MEILI_ENV: production
+      MEILI_NO_ANALYTICS: "true"
+    volumes: [search-data:/meili_data]
+  backend:
+    build: ./бекенд
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      meilisearch: {condition: service_started}
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://nuts:${POSTGRES_PASSWORD}@postgres:5432/nuts_shop
+      REDIS_URL: redis://redis:6379
+      MEILISEARCH_HOST: http://meilisearch:7700
+      MEILISEARCH_API_KEY: ${MEILI_MASTER_KEY}
+      STORE_CORS: https://nutsstore.termitsdigital.ru
+      ADMIN_CORS: https://nutsstore.termitsdigital.ru
+      AUTH_CORS: https://nutsstore.termitsdigital.ru
+      STOREFRONT_URL: https://nutsstore.termitsdigital.ru
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      COOKIE_SECRET: ${COOKIE_SECRET:?Set COOKIE_SECRET}
+      SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:?Set SECRET_ENCRYPTION_KEY}
+      AUTH_MFA_ENCRYPTION_KEY: ${AUTH_MFA_ENCRYPTION_KEY:?Set AUTH_MFA_ENCRYPTION_KEY}
+      MEDUSA_FF_RBAC: "false"
+      SESSION_COOKIE_SECURE: "true"
+      LOCAL_FILE_STORAGE: "true"
+      FILE_PUBLIC_URL: https://nutsstore.termitsdigital.ru/static
+      MEDUSA_ADMIN_ONBOARDING_TYPE: skip
+      MEDUSA_DISABLE_TELEMETRY: "true"
+      GORGO_DISABLE_TELEMETRY: "true"
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
+      NUTS_BOOTSTRAP: "true"
+      NUTS_CONFIG_PATH: /runtime/catalog.json
+    volumes:
+      - uploads:/app/static
+      - storefront-config:/runtime
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:9000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 180s
+      retries: 12
+  frontend:
+    build: ./фронтенд
+    restart: unless-stopped
+    depends_on:
+      backend: {condition: service_healthy}
+    environment:
+      CATALOG_API_URL: http://backend:9000
+      APP_ORIGIN: https://nutsstore.termitsdigital.ru
+      NUTS_CONFIG_PATH: /runtime/catalog.json
+    volumes: [storefront-config:/runtime:ro]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/catalog').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 12
+  proxy:
+    build: ./deploy
+    restart: unless-stopped
+    depends_on:
+      backend: {condition: service_healthy}
+      frontend: {condition: service_healthy}
+    networks: [default, dokploy-network]
+
+networks:
+  dokploy-network:
+    external: true
+volumes:
+  postgres-data:
+  redis-data:
+  search-data:
+  uploads:
+  storefront-config:

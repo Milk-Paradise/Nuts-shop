@@ -1,0 +1,106 @@
+diff --git a/node_modules/@medusajs/workflow-engine-redis/dist/loaders/redis.js b/node_modules/@medusajs/workflow-engine-redis/dist/loaders/redis.js
+index cecce1a..4bbe3e1 100644
+--- a/node_modules/@medusajs/workflow-engine-redis/dist/loaders/redis.js
++++ b/node_modules/@medusajs/workflow-engine-redis/dist/loaders/redis.js
+@@ -5,6 +5,38 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
+ Object.defineProperty(exports, "__esModule", { value: true });
+ const awilix_1 = require("@medusajs/framework/awilix");
+ const ioredis_1 = __importDefault(require("ioredis"));
++function attachConnectionResilience(connection, logger, label) {
++    let unavailable = false;
++    let reconnectTimer;
++    const reportUnavailable = (error) => {
++        if (unavailable)
++            return;
++        unavailable = true;
++        logger?.error(`[Redis] ${label} connection unavailable: ${error}`);
++    };
++    connection.on("error", reportUnavailable);
++    connection.on("ready", () => {
++        if (unavailable) {
++            logger?.info(`[Redis] ${label} connection restored`);
++            unavailable = false;
++        }
++        if (reconnectTimer) {
++            clearTimeout(reconnectTimer);
++            reconnectTimer = undefined;
++        }
++    });
++    connection.on("end", () => {
++        if (connection.manuallyClosing)
++            return;
++        reportUnavailable(new Error("reconnect attempts exhausted"));
++        const cooldown = Number.parseInt(process.env.REDIS_RECONNECT_COOLDOWN_MS ?? "30000", 10);
++        if (reconnectTimer)
++            clearTimeout(reconnectTimer);
++        reconnectTimer = setTimeout(() => connection.connect().catch(reportUnavailable), cooldown);
++        reconnectTimer.unref?.();
++    });
++    return reportUnavailable;
++}
+ exports.default = async ({ container, logger, options, dataLoaderOnly }, moduleDeclaration) => {
+     const { url, redisUrl, options: deprecatedRedisOptions, redisOptions: newRedisOptions, jobQueueName, queueName, 
+     // Shared options
+@@ -58,23 +90,23 @@ exports.default = async ({ container, logger, options, dataLoaderOnly }, moduleD
+     let redisSubscriber;
+     let workerConnection;
+     try {
+-        connection = await getConnection(resolvedUrl, redisOptions);
++        connection = await getConnection(resolvedUrl, redisOptions, logger, "workflow engine");
+         workerConnection = await getConnection(resolvedUrl, {
+             ...(redisOptions ?? {}),
+             maxRetriesPerRequest: null,
+-        });
++        }, logger, "workflow worker");
+         logger?.info(`[Workflow-engine-redis] Connection to Redis in module 'workflow-engine-redis' established`);
+     }
+     catch (err) {
+-        logger?.error(`[Workflow-engine-redis] An error occurred while connecting to Redis in module 'workflow-engine-redis': ${err}`);
++        // The connection listener reports the episode once and owns recovery.
+     }
+     try {
+-        redisPublisher = await getConnection(cnnPubSub.url, cnnPubSub.options);
+-        redisSubscriber = await getConnection(cnnPubSub.url, cnnPubSub.options);
++        redisPublisher = await getConnection(cnnPubSub.url, cnnPubSub.options, logger, "workflow publisher");
++        redisSubscriber = await getConnection(cnnPubSub.url, cnnPubSub.options, logger, "workflow subscriber");
+         logger?.info(`[Workflow-engine-redis] Connection to Redis PubSub in module 'workflow-engine-redis' established`);
+     }
+     catch (err) {
+-        logger?.error(`[Workflow-engine-redis] An error occurred while connecting to Redis PubSub in module 'workflow-engine-redis': ${err}`);
++        // The connection listener reports the episode once and owns recovery.
+     }
+     container.register({
+         isWorkerMode: (0, awilix_1.asValue)(moduleDeclaration.worker_mode !== "server"),
+@@ -100,13 +132,15 @@ exports.default = async ({ container, logger, options, dataLoaderOnly }, moduleD
+         }),
+     });
+ };
+-async function getConnection(url, redisOptions) {
++async function getConnection(url, redisOptions, logger, label) {
+     const connection = new ioredis_1.default(url, {
+         lazyConnect: true,
+         ...(redisOptions ?? {}),
+     });
+-    await new Promise(async (resolve) => {
+-        await connection.connect(resolve);
++    const reportUnavailable = attachConnectionResilience(connection, logger, label);
++    await connection.connect().catch((error) => {
++        reportUnavailable(error);
++        throw error;
+     });
+     return connection;
+ }
+diff --git a/node_modules/@medusajs/workflow-engine-redis/dist/utils/workflow-orchestrator-storage.js b/node_modules/@medusajs/workflow-engine-redis/dist/utils/workflow-orchestrator-storage.js
+index 699188c..287652e 100644
+--- a/node_modules/@medusajs/workflow-engine-redis/dist/utils/workflow-orchestrator-storage.js
++++ b/node_modules/@medusajs/workflow-engine-redis/dist/utils/workflow-orchestrator-storage.js
+@@ -137,6 +137,9 @@ class RedisDistributedTransactionStorage {
+                 const scheduledFor = new Date(job.timestamp);
+                 return await this.executeScheduledJob(job.data.jobId, job.data.schedulerOptions, scheduledFor);
+             }, jobWorkerOptions);
++            this.jobWorker.on("stalled", (jobId) => {
++                this.logger_.error(`Scheduled job ${jobId} lost its worker lock; this occurrence will not be re-executed and the work will run again on its next schedule.`);
++            });
+             this.cleanerWorker_ = new bullmq_1.Worker(this.cleanerQueueName, async () => {
+                 await this.clearExpiredExecutions();
+             }, cleanerWorkerOptions);

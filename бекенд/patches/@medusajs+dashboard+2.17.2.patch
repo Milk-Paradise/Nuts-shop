@@ -1,0 +1,7 @@
+diff --git a/node_modules/@medusajs/dashboard/src/routes/orders/order-detail/components/order-payment-section/order-payment-section.tsx b/node_modules/@medusajs/dashboard/src/routes/orders/order-detail/components/order-payment-section/order-payment-section.tsx
+index 1349340..d0c18d9 100644
+--- a/node_modules/@medusajs/dashboard/src/routes/orders/order-detail/components/order-payment-section/order-payment-section.tsx
++++ b/node_modules/@medusajs/dashboard/src/routes/orders/order-detail/components/order-payment-section/order-payment-section.tsx
+@@ -522 +522 @@
+-            Total pending
++            Ожидает оплаты

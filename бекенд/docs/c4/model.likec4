@@ -1,0 +1,302 @@
+specification {
+  element container {
+    notation "C4 Container"
+    style {
+      shape component
+      color primary
+    }
+  }
+
+  element component {
+    notation "C4 Component"
+    style {
+      shape component
+      color secondary
+    }
+  }
+
+  element external {
+    notation "External system"
+    style {
+      shape rectangle
+      color gray
+    }
+  }
+}
+
+model {
+  backend = container "catalog-backend" {
+    technology "Medusa 2.17.2 / Node.js"
+    description "The only deployable container in this model."
+
+    adminApi = component "Admin API" {
+      description "Authenticated Medusa admin routes, grouped by their first directory below `src/api/admin`."
+      metadata {
+        source "src/api/admin"
+        routeGroups [
+          "custom",
+          "erp-integrations",
+          "moysklad",
+          "notification-channels",
+          "notification-journal",
+          "notifications",
+          "orders",
+          "payment-providers",
+          "products",
+          "shipping-providers",
+          "shipping-return-requests",
+          "site-content",
+          "store-pickup",
+          "uploads"
+        ]
+      }
+    }
+
+    storeApi = component "Store API" {
+      description "Public and customer-authenticated Medusa store routes, grouped by their first directory below `src/api/store`."
+      metadata {
+        source "src/api/store"
+        routeGroups ["account", "carts", "catalog", "custom", "customers", "unsubscribe"]
+      }
+    }
+
+    workflows = component "Workflows" {
+      description "Business mutations, orchestration, steps and compensation."
+      metadata { source "src/workflows" }
+    }
+
+    subscribers = component "Subscribers" {
+      description "Medusa event handlers that hand work to workflows."
+      metadata { source "src/subscribers" }
+    }
+
+    jobs = component "Scheduled jobs" {
+      description "Scheduled entry points that hand work to workflows."
+      metadata { source "src/jobs" }
+    }
+
+    abandonedCartReminder = component "abandoned-cart-reminder" {
+      metadata { source "src/modules/abandoned-cart-reminder" }
+    }
+    cartVersioning = component "cart" {
+      metadata { source "src/modules/cart" }
+    }
+    cartMergeOperation = component "cart-merge-operation" {
+      metadata { source "src/modules/cart-merge-operation" }
+    }
+    cmsSnapshot = component "cms-snapshot" {
+      metadata { source "src/modules/cms-snapshot" }
+    }
+    erpIntegrationRegistry = component "erp-integration-registry" {
+      metadata { source "src/modules/erp-integration-registry" }
+    }
+    meilisearchModule = component "meilisearch" {
+      metadata { source "src/modules/meilisearch" }
+    }
+    moyskladIntegration = component "moysklad-integration" {
+      metadata { source "src/modules/moysklad-integration" }
+    }
+    notificationDomain = component "notification-domain" {
+      metadata { source "src/modules/notification-domain" }
+    }
+    notificationE2e = component "notification-e2e" {
+      metadata { source "src/modules/notification-e2e" }
+    }
+    notificationSmtp = component "notification-smtp" {
+      metadata { source "src/modules/notification-smtp" }
+    }
+    orderFixation = component "order-fixation" {
+      metadata { source "src/modules/order-fixation" }
+    }
+    paymentOperation = component "payment-operation" {
+      metadata { source "src/modules/payment-operation" }
+    }
+    paymentProviderConfig = component "payment-provider-config" {
+      metadata { source "src/modules/payment-provider-config" }
+    }
+    shippingProviderRegistry = component "shipping-provider-registry" {
+      metadata { source "src/modules/shipping-provider-registry" }
+    }
+    siteContent = component "site-content" {
+      metadata { source "src/modules/site-content" }
+    }
+    storePickup = component "store-pickup" {
+      metadata { source "src/modules/store-pickup" }
+    }
+    wishlist = component "wishlist" {
+      metadata { source "src/modules/wishlist" }
+    }
+
+    fulfillmentCdek = component "fulfillment-cdek" {
+      technology "AbstractFulfillmentProviderService"
+      metadata { source "src/providers/fulfillment-cdek" }
+    }
+    fulfillmentOzon = component "fulfillment-ozon" {
+      technology "AbstractFulfillmentProviderService"
+      metadata { source "src/providers/fulfillment-ozon" }
+    }
+    paymentE2e = component "payment-e2e" {
+      technology "AbstractPaymentProvider"
+      description "Test adapter; never calls a production payment system."
+      metadata { source "src/providers/payment-e2e" }
+    }
+    paymentYookassaRuntime = component "payment-yookassa-runtime" {
+      technology "AbstractPaymentProvider"
+      metadata { source "src/providers/payment-yookassa-runtime" }
+    }
+  }
+
+  yookassa = external "YooKassa" {
+    metadata {
+      configAnchor "./src/providers/payment-yookassa-runtime"
+      credentials "database-managed"
+    }
+  }
+  cdek = external "CDEK" {
+    metadata {
+      configAnchor "./src/providers/fulfillment-cdek"
+      credentials "database-managed"
+    }
+  }
+  ozon = external "Ozon Delivery" {
+    metadata {
+      configAnchor "./src/providers/fulfillment-ozon"
+      credentials "database-managed"
+    }
+  }
+  moysklad = external "MoySklad" {
+    metadata {
+      configAnchor "./src/modules/moysklad-integration"
+      credentials "database-managed"
+    }
+  }
+  smtp = external "SMTP server" {
+    metadata {
+      configAnchor "provider: \"smtp\""
+      env ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"]
+      envPrefix "SMTP_"
+    }
+  }
+  meilisearch = external "Meilisearch" {
+    metadata {
+      configAnchor "./src/modules/meilisearch"
+      env ["MEILISEARCH_HOST", "MEILISEARCH_API_KEY", "MEILISEARCH_INDEX_PREFIX"]
+      envPrefix "MEILISEARCH_"
+    }
+  }
+  telegram = external "Telegram Bot API" {
+    metadata {
+      configAnchor "./src/modules/notification-domain"
+      credentials "database-managed"
+    }
+  }
+  smsc = external "SMSC.ru" {
+    metadata {
+      configAnchor "./src/modules/notification-domain"
+      credentials "database-managed"
+    }
+  }
+
+  backend.adminApi -> backend.workflows "executes"
+  backend.storeApi -> backend.workflows "executes"
+  backend.subscribers -> backend.workflows "starts"
+  backend.jobs -> backend.workflows "starts"
+
+  backend.workflows -> backend.cartVersioning "mutates"
+  backend.workflows -> backend.cartMergeOperation "mutates"
+  backend.workflows -> backend.erpIntegrationRegistry "mutates"
+  backend.workflows -> backend.moyskladIntegration "mutates"
+  backend.workflows -> backend.notificationDomain "mutates"
+  backend.workflows -> backend.orderFixation "mutates"
+  backend.workflows -> backend.paymentOperation "mutates"
+  backend.workflows -> backend.paymentProviderConfig "mutates"
+  backend.workflows -> backend.shippingProviderRegistry "mutates"
+  backend.workflows -> backend.siteContent "mutates"
+  backend.workflows -> backend.storePickup "mutates"
+
+  backend.paymentYookassaRuntime -> backend.paymentProviderConfig "reads runtime credentials"
+  backend.fulfillmentCdek -> backend.shippingProviderRegistry "reads runtime credentials"
+  backend.fulfillmentOzon -> backend.shippingProviderRegistry "reads runtime credentials"
+
+  backend.paymentYookassaRuntime -> yookassa "payments and refunds"
+  backend.fulfillmentCdek -> cdek "rates, pickup points and shipments"
+  backend.shippingProviderRegistry -> cdek "provider API client"
+  backend.fulfillmentOzon -> ozon "rates, pickup points and shipments"
+  backend.shippingProviderRegistry -> ozon "provider API client"
+  backend.moyskladIntegration -> moysklad "catalog and order synchronization"
+  backend.notificationSmtp -> smtp "sends email"
+  backend.meilisearchModule -> meilisearch "indexes and searches catalog"
+  backend.notificationDomain -> telegram "sends and verifies messages"
+  backend.notificationDomain -> smsc "sends and verifies SMS"
+}
+
+views {
+  view index {
+    title "catalog-backend context"
+    description "The single Medusa container and the external systems reached by its components."
+    include backend, yookassa, cdek, ozon, moysklad, smtp, meilisearch, telegram, smsc
+    autoLayout LeftRight
+  }
+
+  view orchestration of backend {
+    title "API and orchestration components"
+    include adminApi, storeApi, workflows, subscribers, jobs
+    autoLayout LeftRight
+  }
+
+  view modules of backend {
+    title "Custom Medusa modules"
+    include workflows,
+      abandonedCartReminder,
+      cartVersioning,
+      cartMergeOperation,
+      cmsSnapshot,
+      erpIntegrationRegistry,
+      meilisearchModule,
+      moyskladIntegration,
+      notificationDomain,
+      notificationE2e,
+      notificationSmtp,
+      orderFixation,
+      paymentOperation,
+      paymentProviderConfig,
+      shippingProviderRegistry,
+      siteContent,
+      storePickup,
+      wishlist
+    autoLayout LeftRight
+  }
+
+  dynamic view cdekCourierTariff {
+    title "CDEK courier tariff calculation with city code resolution"
+    backend.storeApi -> backend.fulfillmentCdek "requests shipping options for cart address"
+    backend.fulfillmentCdek -> cdek "looks up city code for address (cached)"
+    cdek -> backend.fulfillmentCdek "city code or not-found"
+    backend.fulfillmentCdek -> cdek "calculates tariff with resolved city code"
+    cdek -> backend.fulfillmentCdek "tariff or calculator error"
+    backend.fulfillmentCdek -> backend.storeApi "price, or delivery-method error"
+  }
+
+  view integrations {
+    title "Provider and integration components"
+    include backend.meilisearchModule,
+      backend.moyskladIntegration,
+      backend.notificationDomain,
+      backend.notificationSmtp,
+      backend.paymentProviderConfig,
+      backend.shippingProviderRegistry,
+      backend.fulfillmentCdek,
+      backend.fulfillmentOzon,
+      backend.paymentE2e,
+      backend.paymentYookassaRuntime,
+      yookassa,
+      cdek,
+      ozon,
+      moysklad,
+      smtp,
+      meilisearch,
+      telegram,
+      smsc
+    autoLayout LeftRight
+  }
+}

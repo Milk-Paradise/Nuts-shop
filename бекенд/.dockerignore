@@ -1,0 +1,11 @@
+node_modules
+.medusa
+dist
+build
+coverage
+.env*
+.git
+*.log
+*.pem
+*.key
+.DS_Store

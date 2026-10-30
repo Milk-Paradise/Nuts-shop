@@ -1,0 +1,74 @@
+diff --git a/node_modules/@medusajs/locking/dist/providers/in-memory.js b/node_modules/@medusajs/locking/dist/providers/in-memory.js
+index e52fc05..490960b 100644
+--- a/node_modules/@medusajs/locking/dist/providers/in-memory.js
++++ b/node_modules/@medusajs/locking/dist/providers/in-memory.js
+@@ -28,21 +28,34 @@ class InMemoryLockingProvider {
+             expire: timeoutSeconds,
+             awaitQueue: true,
+         }, cancellationToken));
+-        await Promise.race(promises);
+         try {
++            await Promise.race(promises);
+             return await job();
+         }
+         finally {
++            // A timed-out race above leaves `acquire_` mid-iteration: some of
++            // `keys` may already be set in `this.locks`. `release` is a no-op
++            // for keys we never actually acquired, so releasing the whole
++            // array here is always safe and prevents those entries leaking
++            // until their natural expiration.
+             await this.release(keys);
+         }
+     }
+     async acquire(keys, args) {
+         return this.acquire_(keys, args);
+     }
+-    async acquire_(keys, args, cancellationToken) {
++    async acquire_(keys, args, cancellationToken, acquiredKeys) {
+         keys = Array.isArray(keys) ? keys : [keys];
+         const { ownerId, expire } = args ?? {};
++        // Recursion below restarts the full `keys` list after waiting out a
++        // contended key. Without tracking what this call already acquired,
++        // re-scanning keys we hold (under no ownerId) looks like contention
++        // against ourselves and awaits our own lock's promise forever.
++        const acquired = acquiredKeys ?? new Set();
+         for (const key of keys) {
++            if (acquired.has(key)) {
++                continue;
++            }
+             const lock = this.locks.get(key);
+             const now = Date.now();
+             if (!lock) {
+@@ -51,6 +64,7 @@ class InMemoryLockingProvider {
+                     expiration: expire ? now + expire * 1000 : null,
+                     currentPromise: this.getPromise(),
+                 });
++                acquired.add(key);
+                 continue;
+             }
+             if (lock.expiration && lock.expiration <= now) {
+@@ -60,6 +74,7 @@ class InMemoryLockingProvider {
+                     expiration: expire ? now + expire * 1000 : null,
+                     currentPromise: this.getPromise(),
+                 });
++                acquired.add(key);
+                 continue;
+             }
+             if (lock.ownerId !== null && lock.ownerId === ownerId) {
+@@ -67,6 +82,7 @@ class InMemoryLockingProvider {
+                     lock.expiration = now + expire * 1000;
+                     this.locks.set(key, lock);
+                 }
++                acquired.add(key);
+                 continue;
+             }
+             if (lock.currentPromise && args?.awaitQueue) {
+@@ -74,7 +90,7 @@ class InMemoryLockingProvider {
+                 if (cancellationToken?.cancelled) {
+                     return;
+                 }
+-                return this.acquire(keys, args);
++                return this.acquire_(keys, args, cancellationToken, acquired);
+             }
+             throw new Error(`Failed to acquire lock for key "${key}"`);
+         }

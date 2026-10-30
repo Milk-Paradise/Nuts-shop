@@ -1,0 +1,9 @@
+{
+  "$schema": "https://likec4.dev/schemas/config.json",
+  "name": "catalog-backend",
+  "title": "catalog-backend — C4 Components",
+  "implicitViews": false,
+  "landingPage": {
+    "redirect": true
+  }
+}
