@@ -79,6 +79,8 @@ services:
     environment:
       CATALOG_API_URL: http://backend:9000
       APP_ORIGIN: https://nutsstore.termitsdigital.ru
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       NUTS_CONFIG_PATH: /runtime/catalog.json
     volumes: [storefront-config:/runtime:ro]
     healthcheck:
