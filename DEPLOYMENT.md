@@ -13,6 +13,12 @@
 Домен направляется на сервис `proxy`, порт 80, HTTPS Let's Encrypt.
 Пароли задаются через Environment Dokploy; в Git их нет.
 
+Развёрнуто 30 октября 2026 в проекте Nuts Store, окружение production,
+Compose `nutsstore-cqsjzl`. Проверены HTTPS, `/health`, каталог, фотографии,
+вход администратора и корзина. В серверной базе добавлены два тестовых товара:
+iPhone 16 (69 990 ₽, 5 шт.) и AirPods Pro 2 (19 990 ₽, 8 шт.).
+Локальная копия данных входа администратора: `.local/production-admin.json`.
+
 Обязательные переменные: POSTGRES_PASSWORD, MEILI_MASTER_KEY, JWT_SECRET,
 COOKIE_SECRET, SECRET_ENCRYPTION_KEY (32 случайных байта в base64),
 AUTH_MFA_ENCRYPTION_KEY, ADMIN_EMAIL, ADMIN_PASSWORD.

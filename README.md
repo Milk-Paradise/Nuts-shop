@@ -1,5 +1,14 @@
 # Локальный Nuts Store
 
+GitHub: https://github.com/Milk-Paradise/Nuts-shop
+
+Опубликованный сайт: https://nutsstore.termitsdigital.ru
+
+Серверная админка: https://nutsstore.termitsdigital.ru/app
+
+Настройка сервера описана в `DEPLOYMENT.md`. Общая папка проекта теперь
+является единым Git-репозиторием для фронтенда и бэкенда.
+
 Проекты находятся в `фронтенд` (Next.js) и `бекенд` (Medusa).
 
 ## Что установить
