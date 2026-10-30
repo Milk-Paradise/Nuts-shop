@@ -2,9 +2,10 @@ import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 const root = path.dirname(fileURLToPath(import.meta.url));
-const settings = JSON.parse(await readFile(path.join(root, ".local/catalog.json")));
-const credentials = JSON.parse(await readFile(path.join(root, ".local/admin-credentials.json")));
-const base = "http://127.0.0.1:9000";
+const remote = Boolean(process.env.NUTS_BACKEND_URL);
+const settings = remote ? {} : JSON.parse(await readFile(path.join(root, ".local/catalog.json")));
+const credentials = JSON.parse(await readFile(process.env.NUTS_ADMIN_CREDENTIALS || path.join(root, ".local/admin-credentials.json")));
+const base = process.env.NUTS_BACKEND_URL || "http://127.0.0.1:9000";
 let token;
 async function request(url, data, method = "POST") {
   const response = await fetch(base + url, { method, headers: {
@@ -16,6 +17,12 @@ async function request(url, data, method = "POST") {
   return body;
 }
 token = (await request("/auth/user/emailpass", credentials)).token;
+if (remote) {
+  settings.salesChannelId = (await request("/admin/sales-channels", undefined, "GET")).sales_channels.find((item) => item.name === "Nuts Store")?.id;
+  settings.stockLocationId = (await request("/admin/stock-locations", undefined, "GET")).stock_locations.find((item) => item.name === "Main Warehouse")?.id;
+  settings.shippingProfileId = (await request("/admin/shipping-profiles", undefined, "GET")).shipping_profiles.find((item) => item.name === "Default Shipping Profile")?.id;
+  if (!settings.salesChannelId || !settings.stockLocationId || !settings.shippingProfileId) throw new Error("Nuts Store commerce baseline is missing");
+}
 const fixtures = [
   { title: "Apple iPhone 16 128 GB", handle: "local-iphone-16-128", category: "smartphones", categoryName: "Смартфоны", image: "iphone-hq.png", price: 69990, stock: 5, storage: "128 GB", color: "Чёрный", sku: "NUTS-LOCAL-IP16-128" },
   { title: "Apple AirPods Pro 2", handle: "local-airpods-pro-2", category: "headphones", categoryName: "Наушники", image: "airpods-pro.png", price: 19990, stock: 8, storage: "USB-C", color: "Белый", sku: "NUTS-LOCAL-AIRPODS-PRO2" },
@@ -44,5 +51,6 @@ for (const item of fixtures) {
   await request(`/admin/inventory-items/${inventoryItemId}/location-levels`, { location_id: settings.stockLocationId, stocked_quantity: item.stock });
   console.log(`Created: ${item.title}; ${item.price} RUB; stock ${item.stock}`);
 }
-await writeFile(path.join(root, "фронтенд/.env.local"), `USE_MOCK=false\nCATALOG_API_FORMAT=medusa\nCATALOG_API_URL=http://127.0.0.1:9000\nCATALOG_PRODUCTS_PATH=/store/products\nCATALOG_PUBLISHABLE_KEY=${settings.publishableKey}\nCATALOG_REGION_ID=${settings.regionId}\nCATALOG_IMAGE_HOST=localhost\nCATALOG_IMAGE_PROTOCOL=http\nCATALOG_IMAGE_PORT=9000\nAPP_ORIGIN=http://localhost:3000\n`);
+if (!remote) await writeFile(path.join(root, "фронтенд/.env.local"), `USE_MOCK=false\nCATALOG_API_FORMAT=medusa\nCATALOG_API_URL=http://127.0.0.1:9000\nCATALOG_PRODUCTS_PATH=/store/products\nCATALOG_PUBLISHABLE_KEY=${settings.publishableKey}\nCATALOG_REGION_ID=${settings.regionId}\nCATALOG_IMAGE_HOST=localhost\nCATALOG_IMAGE_PROTOCOL=http\nCATALOG_IMAGE_PORT=9000\nAPP_ORIGIN=http://localhost:3000\n`);
+
 
